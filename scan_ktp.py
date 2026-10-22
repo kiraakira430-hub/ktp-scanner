@@ -5,7 +5,7 @@ import pandas as pd
 import os
 
 # Menghubungkan Python ke aplikasi Tesseract OCR Windows
-pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
+# pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
 
 def clean_ocr_text(text):
     """
@@ -122,7 +122,7 @@ def save_to_excel(data, excel_filename="database_ktp.xlsx"):
     print(f"📌 Alamat: {data['Alamat']}")
 
 if __name__ == "__main__":
-    path_gambar = "sample_ktp.jpg" 
+    path_gambar = "ALFI.jpeg"
     
     data_ktp = extract_ktp_data(path_gambar)
     if data_ktp:
