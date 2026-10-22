@@ -4,7 +4,8 @@ import re
 import pandas as pd
 import os
 
-# Menghubungkan Python ke aplikasi Tesseract OCR Windows
+# Mengatur path tesseract secara otomatis untuk environment Linux (Streamlit Cloud)
+pytesseract.pytesseract.tesseract_cmd = '/usr/bin/tesseract'
 # pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
 
 def clean_ocr_text(text):
