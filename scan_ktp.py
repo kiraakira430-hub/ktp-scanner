@@ -3,10 +3,10 @@ import pytesseract
 import re
 import pandas as pd
 import os
+import streamlit as st
 
 # Mengatur path tesseract secara otomatis untuk environment Linux (Streamlit Cloud)
 pytesseract.pytesseract.tesseract_cmd = '/usr/bin/tesseract'
-# pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
 
 def clean_ocr_text(text):
     """
@@ -26,7 +26,6 @@ def extract_ktp_data(image_path):
 
     # Preprocessing gambar: Ubah ke Grayscale + Thresholding agar teks hitam lebih kontras
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    # Memperjelas kontras teks
     gray = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)[1]
 
     # Proses OCR dengan konfigurasi psm 6 (Asumsi blok teks seragam)
@@ -49,51 +48,80 @@ def extract_ktp_data(image_path):
 
     lines = [line.strip() for line in text.split('\n') if line.strip()]
 
-    # 1. CARI NIK (Cari baris yang berisi deretan 16 angka)
+    # 1. CARI NIK (Mencari angka 16 digit apa saja secara fleksibel)
     for line in lines:
         nums_only = re.sub(r'\D', '', line)
-        # NIK KTP Indonesia dimulai dengan kode provinsi (contoh 327... atau 320...)
         if len(nums_only) >= 16:
-            # Ambil 16 digit angka yang sesuai pola NIK
-            nik_match = re.search(r'(3[1-7]\d{14})', nums_only)
+            nik_match = re.search(r'(\d{16})', nums_only)
             if nik_match:
                 data["NIK"] = nik_match.group(1)
-            else:
-                data["NIK"] = nums_only[:16]
-            break
+                break
 
-    # 2. CARI NAMA (Bisa langsung mengambil nama 'ANDRI SETIAWAN' dari hasil OCR)
-    for line in lines:
-        if 'ANDRI SETIAWAN' in line.upper():
-            data["Nama"] = "ANDRI SETIAWAN"
+    if not data["NIK"]:
+        all_nums = re.sub(r'\D', '', text)
+        nik_match = re.search(r'(\d{16})', all_nums)
+        if nik_match:
+            data["NIK"] = nik_match.group(1)
+
+    # 2. CARI NAMA (Mencari baris setelah kata NAMA)
+    for i, line in enumerate(lines):
+        line_up = line.upper()
+        if 'NAMA' in line_up and 'Keluarga' not in line:
+            parts = line.split(':')
+            if len(parts) > 1 and len(parts[1].strip()) > 3:
+                data["Nama"] = parts[1].strip()
+            elif i + 1 < len(lines):
+                data["Nama"] = lines[i + 1].strip()
             break
-        elif re.search(r'^[A-Z\s]{4,}$', line) and not any(kw in line.upper() for kw in ['KOTA', 'PROVINSI', 'KEKAS', 'BEKASI', 'JAWA']):
-            data["Nama"] = line.strip()
+    
+    # Cadangan Nama (Cari teks huruf kapital panjang yang mirip nama orang)
+    if not data["Nama"]:
+        for line in lines:
+            if re.match(r'^[A-Z\s]{5,}$', line) and not any(kw in line.upper() for kw in ['PROVINSI', 'KABUPATEN', 'KOTA', 'JAWA', 'BLORA', 'GROBOGAN', 'NIK', 'GOL']):
+                data["Nama"] = line.strip()
+                break
 
     # 3. CARI TEMPAT / TGL LAHIR
-    ttl_match = re.search(r'([A-Za-z]+)[\s,]+(\d{2}[-\s]\d{2}[-\s]\d{4})', text)
-    if ttl_match:
-        tempat = ttl_match.group(1).replace('SUXKABUMI', 'SUKABUMI')
-        tgl = ttl_match.group(2).replace(' ', '-')
-        data["Tempat/Tgl Lahir"] = f"{tempat}, {tgl}"
-    else:
-        # Cadangan pencarian khusus Sukabumi
-        if 'SUKABUMI' in text.upper() or 'SUXKABUMI' in text.upper():
-            tgl_match = re.search(r'\d{2}-\d{2}-\d{4}', text)
-            tgl_str = tgl_match.group(0) if tgl_match else "11-02-1973"
-            data["Tempat/Tgl Lahir"] = f"SUKABUMI, {tgl_str}"
+    for line in lines:
+        if 'LAHIR' in line.upper() or 'TEMPAT' in line.upper():
+            tgl_match = re.search(r'(\d{2}[-\/]\d{2}[-\/]\d{4})', line)
+            if tgl_match:
+                tgl = tgl_match.group(1).replace('/', '-')
+                parts = line.split(':')
+                tempat_teks = parts[1] if len(parts) > 1 else line
+                tempat_clean = re.sub(r'\d{2}[-\/]\d{2}[-\/]\d{4}', '', tempat_teks).replace(',', '').strip()
+                if not tempat_clean:
+                    tempat_clean = "KABUPATEN"
+                data["Tempat/Tgl Lahir"] = f"{tempat_clean.upper()}, {tgl}"
+                break
+    
+    if not data["Tempat/Tgl Lahir"]:
+        tgl_match = re.search(r'(\d{2}[-\/]\d{2}[-\/]\d{4})', text)
+        if tgl_match:
+            tgl = tgl_match.group(1).replace('/', '-')
+            data["Tempat/Tgl Lahir"] = f"WILAYAH, {tgl}"
 
-    # 4. CARI ALAMAT (Gabungkan baris RT/RW, Desa/Kel, Kec)
+    # 4. CARI ALAMAT (Menangkap baris Alamat, RT/RW, Kel/Desa, Kecamatan)
     alamat_parts = []
+    capture = False
     for line in lines:
         line_up = line.upper()
-        if any(kw in line_up for kw in ['PONDOK UNGU', 'MEDAN SATRIA', 'GAN SATRIA', '863/003', 'RT']):
+        if 'ALAMAT' in line_up:
+            capture = True
+            parts = line.split(':')
+            if len(parts) > 1 and len(parts[1].strip()) > 2:
+                alamat_parts.append(parts[1].strip())
+            continue
+        
+        if capture:
+            if any(kw in line_up for kw in ['AGAMA', 'STATUS', 'PEKERJAAN', 'KEWARGANEGARAAN', 'BERLAKU']):
+                break
             alamat_parts.append(line.strip())
 
     if alamat_parts:
-        data["Alamat"] = " ".join(alamat_parts)
+        data["Alamat"] = ", ".join([p for p in alamat_parts if p])
     else:
-        data["Alamat"] = "PONDOK UNGU, MEDAN SATRIA, KOTA BEKASI"
+        data["Alamat"] = "ALAMAT TIDAK TERBACA"
 
     return data
 
@@ -112,25 +140,18 @@ def save_to_excel(data, excel_filename="database_ktp.xlsx"):
     else:
         df_final = df_new
 
-    # Simpan ke Excel dengan memastikan NIK disimpan sebagai format teks (agar digit 0 di depan tidak hilang)
+    # Simpan ke Excel dengan memastikan NIK disimpan sebagai format teks
     with pd.ExcelWriter(excel_filename, engine='openpyxl') as writer:
         df_final.to_excel(writer, index=False)
 
     print(f"✅ SUKSES! Data berhasil diperbarui di Excel: {excel_filename}")
-    print(f"📌 NIK: {data['NIK']}")
-    print(f"📌 Nama: {data['Nama']}")
-    print(f"📌 Tempat/Tgl Lahir: {data['Tempat/Tgl Lahir']}")
-    print(f"📌 Alamat: {data['Alamat']}")
 
-import streamlit as st
-
+# --- TAMPILAN STREAMLIT WEB ---
 st.title("Aplikasi KTP Scanner OCR")
 
-# Widget untuk upload foto KTP di halaman web
 uploaded_file = st.file_uploader("Pilih file foto KTP...", type=["jpg", "jpeg", "png"])
 
 if uploaded_file is not None:
-    # Simpan file yang diupload secara sementara
     with open("temp_ktp.jpeg", "wb") as f:
         f.write(uploaded_file.getbuffer())
     
@@ -145,4 +166,3 @@ if uploaded_file is not None:
                 st.json(data_ktp)
             else:
                 st.error("Gagal membaca data dari gambar KTP.")
-        
