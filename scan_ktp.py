@@ -121,10 +121,27 @@ def save_to_excel(data, excel_filename="database_ktp.xlsx"):
     print(f"📌 Tempat/Tgl Lahir: {data['Tempat/Tgl Lahir']}")
     print(f"📌 Alamat: {data['Alamat']}")
 
-if __name__ == "__main__":
-    path_gambar = "ALFI.jpeg"
+import streamlit as st
+
+st.title("Aplikasi KTP Scanner OCR")
+
+# Widget untuk upload foto KTP di halaman web
+uploaded_file = st.file_uploader("Pilih file foto KTP...", type=["jpg", "jpeg", "png"])
+
+if uploaded_file is not None:
+    # Simpan file yang diupload secara sementara
+    with open("temp_ktp.jpeg", "wb") as f:
+        f.write(uploaded_file.getbuffer())
     
-    data_ktp = extract_ktp_data(path_gambar)
-    if data_ktp:
-        save_to_excel(data_ktp)
+    st.image(uploaded_file, caption="KTP yang Diupload", use_container_width=True)
+    
+    if st.button("Mulai Scan KTP"):
+        with st.spinner("Sedang memproses OCR..."):
+            data_ktp = extract_ktp_data("temp_ktp.jpeg")
+            if data_ktp:
+                save_to_excel(data_ktp)
+                st.success("SUKSES! Data berhasil diekstrak dan disimpan ke Excel.")
+                st.json(data_ktp)
+            else:
+                st.error("Gagal membaca data dari gambar KTP.")
         
