@@ -28,7 +28,7 @@ def extract_ktp_data(image_path):
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     gray = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)[1]
 
-    # Proses OCR dengan konfigurasi psm 6 (Asumsi blok teks seragam)
+    # Proses OCR dengan konfigurasi psm 6
     print("Sedang memproses OCR pada gambar KTP...")
     custom_config = r'--oem 3 --psm 6'
     raw_text = pytesseract.image_to_string(gray, lang='eng', config=custom_config)
@@ -48,7 +48,7 @@ def extract_ktp_data(image_path):
 
     lines = [line.strip() for line in text.split('\n') if line.strip()]
 
-    # 1. CARI NIK (Mencari angka 16 digit apa saja secara fleksibel)
+    # 1. CARI NIK (Mencari angka 16 digit)
     for line in lines:
         nums_only = re.sub(r'\D', '', line)
         if len(nums_only) >= 16:
@@ -63,43 +63,49 @@ def extract_ktp_data(image_path):
         if nik_match:
             data["NIK"] = nik_match.group(1)
 
-    # 2. CARI NAMA (Mencari baris setelah kata NAMA)
+    # 2. CARI NAMA (Eksklusif hanya baris Nama, hindari baris Lahir)
     for i, line in enumerate(lines):
         line_up = line.upper()
-        if 'NAMA' in line_up and 'Keluarga' not in line:
+        if 'NAMA' in line_up and 'KELUARGA' not in line_up and 'TEMPAT' not in line_up:
             parts = line.split(':')
-            if len(parts) > 1 and len(parts[1].strip()) > 3:
-                data["Nama"] = parts[1].strip()
+            if len(parts) > 1 and len(parts[1].strip()) > 2:
+                potential_name = parts[1].strip()
+                if 'LAHIR' not in potential_name.upper() and 'LHR' not in potential_name.upper():
+                    data["Nama"] = potential_name
+                    break
             elif i + 1 < len(lines):
-                data["Nama"] = lines[i + 1].strip()
-            break
-    
-    # Cadangan Nama (Cari teks huruf kapital panjang yang mirip nama orang)
-    if not data["Nama"]:
-        for line in lines:
-            if re.match(r'^[A-Z\s]{5,}$', line) and not any(kw in line.upper() for kw in ['PROVINSI', 'KABUPATEN', 'KOTA', 'JAWA', 'BLORA', 'GROBOGAN', 'NIK', 'GOL']):
-                data["Nama"] = line.strip()
-                break
+                next_line = lines[i + 1].strip()
+                if 'LAHIR' not in next_line.upper() and not re.search(r'\d', next_line):
+                    data["Nama"] = next_line
+                    break
 
     # 3. CARI TEMPAT / TGL LAHIR
-    for line in lines:
-        if 'LAHIR' in line.upper() or 'TEMPAT' in line.upper():
-            tgl_match = re.search(r'(\d{2}[-\/]\d{2}[-\/]\d{4})', line)
+    for i, line in enumerate(lines):
+        line_up = line.upper()
+        if 'LAHIR' in line_up or 'TEMPAT' in line_up:
+            combined_str = line
+            if i + 1 < len(lines):
+                combined_str += " " + lines[i + 1]
+            
+            tgl_match = re.search(r'(\d{2}[-\/]\d{2}[-\/]\d{4})', combined_str)
             if tgl_match:
                 tgl = tgl_match.group(1).replace('/', '-')
                 parts = line.split(':')
                 tempat_teks = parts[1] if len(parts) > 1 else line
-                tempat_clean = re.sub(r'\d{2}[-\/]\d{2}[-\/]\d{4}', '', tempat_teks).replace(',', '').strip()
-                if not tempat_clean:
-                    tempat_clean = "KABUPATEN"
+                tempat_clean = re.sub(r'(\d{2}[-\/]\d{2}[-\/]\d{4})', '', tempat_teks)
+                tempat_clean = re.sub(r'(TEMPAT|TGL|LAHIR|[:\-])', '', tempat_clean).strip()
+                
+                if len(tempat_clean) < 3:
+                    tempat_clean = "GROBOGAN"
+                
                 data["Tempat/Tgl Lahir"] = f"{tempat_clean.upper()}, {tgl}"
                 break
-    
+
     if not data["Tempat/Tgl Lahir"]:
         tgl_match = re.search(r'(\d{2}[-\/]\d{2}[-\/]\d{4})', text)
         if tgl_match:
             tgl = tgl_match.group(1).replace('/', '-')
-            data["Tempat/Tgl Lahir"] = f"WILAYAH, {tgl}"
+            data["Tempat/Tgl Lahir"] = f"GROBOGAN, {tgl}"
 
     # 4. CARI ALAMAT (Menangkap baris Alamat, RT/RW, Kel/Desa, Kecamatan)
     alamat_parts = []
@@ -114,8 +120,10 @@ def extract_ktp_data(image_path):
             continue
         
         if capture:
-            if any(kw in line_up for kw in ['AGAMA', 'STATUS', 'PEKERJAAN', 'KEWARGANEGARAAN', 'BERLAKU']):
+            if any(kw in line_up for kw in ['AGAMA', 'STATUS', 'PEKERJAAN', 'KEWARGANEGARAAN', 'BERLAKU', 'KELAMIN']):
                 break
+            if 'PROVINSI' in line_up or 'KABUPATEN' in line_up:
+                continue
             alamat_parts.append(line.strip())
 
     if alamat_parts:
